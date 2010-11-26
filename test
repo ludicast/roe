@@ -1,4 +1,6 @@
 #!/bin/sh
 
-erlc parser.erl 
+erlc lexer.erl
+erlc parser.erl
 erl -noshell -s parser test -s init stop
+erl -noshell -s lexer test -s init stop

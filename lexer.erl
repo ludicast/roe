@@ -56,25 +56,27 @@ get_tokens([Token|Rest]) ->
 	[token_for_char(Token) | get_tokens(Rest)].
 
 get_token_list(String) ->
-	get_tokens(String).
+	Lines = string:tokens(String, "\n"),
+	lists:map(fun get_tokens/1, Lines).
 	
 get_token_list_test_() ->
 	[
-		?_assert(get_token_list("-") =:= [{binop, minus}]),
-		?_assert(get_token_list("+") =:= [{binop, plus}]),
-		?_assert(get_token_list("*") =:= [{binop, times}]),
-		?_assert(get_token_list(")") =:= [close_paren]),
-		?_assert(get_token_list("(") =:= [open_paren]),
-		?_assert(get_token_list("\~") =:= [unary_minus]),
-		?_assert(get_token_list("3") =:= [{number, 3}]),
-		?_assert(get_token_list("3+3") =:= [{number, 3},{binop, plus},{number, 3}]),				
-		?_assert(get_token_list(" 3  +   3 ") =:= [{number, 3},{binop, plus},{number, 3}]),
-		?_assert(get_token_list("33") =:= [{number, 33}]),
-		?_assert(get_token_list("foobar") =:= [{string, "foobar"}]),	
-		?_assert(get_token_list("if") =:= [if_token]),
-		?_assert(get_token_list("else") =:= [else_token]),
-		?_assert(get_token_list("then") =:= [then_token]),
-		?_assert(get_token_list("let") =:= [let_token]),
-		?_assert(get_token_list("in") =:= [in_token]),
-		?_assert(get_token_list("=") =:= [equals])			
+		?_assert(get_token_list("-") =:= [[{binop, minus}]]),
+		?_assert(get_token_list("+") =:= [[{binop, plus}]]),
+		?_assert(get_token_list("*") =:= [[{binop, times}]]),
+		?_assert(get_token_list(")") =:= [[close_paren]]),
+		?_assert(get_token_list("(") =:= [[open_paren]]),
+		?_assert(get_token_list("\~") =:= [[unary_minus]]),
+		?_assert(get_token_list("3") =:= [[{number, 3}]]),
+		?_assert(get_token_list("3+3") =:= [[{number, 3},{binop, plus},{number, 3}]]),				
+		?_assert(get_token_list(" 3  +   3 ") =:= [[{number, 3},{binop, plus},{number, 3}]]),
+		?_assert(get_token_list("33") =:= [[{number, 33}]]),
+		?_assert(get_token_list("3\n3") =:= [[{number, 3}],[{number, 3}]]),
+		?_assert(get_token_list("foobar") =:= [[{string, "foobar"}]]),	
+		?_assert(get_token_list("if") =:= [[if_token]]),
+		?_assert(get_token_list("else") =:= [[else_token]]),
+		?_assert(get_token_list("then") =:= [[then_token]]),
+		?_assert(get_token_list("let") =:= [[let_token]]),
+		?_assert(get_token_list("in") =:= [[in_token]]),
+		?_assert(get_token_list("=") =:= [[equals]])		
 	].

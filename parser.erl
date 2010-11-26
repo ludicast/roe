@@ -1,10 +1,11 @@
 -module(parser).
--export([create_syntax_tree/1, interpret/1,pretty_print/1,run/1,compile/1]).
+-export([create_syntax_tree/1, interpret/1,pretty_print/1,run/1,compile/1, simplifier/1]).
 -include_lib("eunit/include/eunit.hrl").
 
 expression_from_tokens([First|List]) ->
 	{Value,Rest} = case First of
 		{number, Val} -> {{num, Val}, List};
+		{string, Val} -> {{var_name, Val}, List};
 		open_paren -> 
 			{InnerValue, [close_paren|PostParens]} = expression_from_tokens(List),
 			{InnerValue, PostParens};
@@ -15,32 +16,50 @@ expression_from_tokens([First|List]) ->
 			{ FirstExpression, [then_token|AfterThen] } = expression_from_tokens(List),
 			{ SecondExpression, [ else_token | AfterElse] } =  expression_from_tokens(AfterThen),
 			{ ElseResult, EndTokens } = expression_from_tokens(AfterElse),
-			{{if_operation, FirstExpression, SecondExpression, ElseResult}, EndTokens}
+			{{if_operation, FirstExpression, SecondExpression, ElseResult}, EndTokens};
+		let_token ->
+			[{string, VarName} | [ equals |  AfterEquals  ] ]  = List,
+			{Rhs, [in_token | InExpression] } = expression_from_tokens(AfterEquals),
+			{TranslatedInExpression, InExpressionRemainder} = expression_from_tokens(InExpression),
+			{{let_clause, {{var_name, VarName}, Rhs, TranslatedInExpression}}, InExpressionRemainder}
 	end,
 	case Rest of
 		[{binop, Operation}|RightHandSide] ->
 			{ RightHandSideTree, AfterTree } = expression_from_tokens(RightHandSide),
 			{{Operation, Value, RightHandSideTree}, AfterTree};
+		[equals | Assignment] ->
+			{AssignmentValue, ParseRamainder} = expression_from_tokens(Assignment),
+			{{ assignment, {Value, AssignmentValue}}, ParseRamainder};	
 		_ -> {Value, Rest}
 	end.
 		
 create_syntax_tree(String) ->
-	Tokens = lexer:get_token_list(String),
+	[Tokens | Lists] = lexer:get_token_list(String),
 	{Result, []} = expression_from_tokens(Tokens),
 	simplifier(Result).
-	
+
+
 evaluate(Expression) ->
+	evaluate(Expression, dict:new()).
+	
+evaluate(Expression, Context) ->
 	case Expression of 
 		{num, Val} -> Val;
-		{plus, Lhs, Rhs} -> evaluate(Lhs) + evaluate(Rhs);		
-		{minus, Lhs, Rhs} -> evaluate(Lhs) - evaluate(Rhs);		
-		{times, Lhs, Rhs} -> evaluate(Lhs) * evaluate(Rhs);							
-		{unary_minus, Negated} -> -evaluate(Negated);
+		{var_name, VarName} -> 
+			{ok, Value} = dict:find(VarName, Context),
+			Value;
+		{plus, Lhs, Rhs} -> evaluate(Lhs, Context) + evaluate(Rhs, Context);		
+		{minus, Lhs, Rhs} -> evaluate(Lhs, Context) - evaluate(Rhs, Context);		
+		{times, Lhs, Rhs} -> evaluate(Lhs, Context) * evaluate(Rhs, Context);							
+		{unary_minus, Negated} -> -evaluate(Negated, Context);
 		{if_operation, Condition, ThenClause, ElseClause} ->
-			case evaluate(Condition) of
-				0 -> evaluate(ElseClause);
-				_ -> evaluate(ThenClause)
-			end	
+			case evaluate(Condition, Context) of
+				0 -> evaluate(ElseClause, Context);
+				_ -> evaluate(ThenClause, Context)
+			end;
+		{let_clause, {{var_name, VarName}, VarValue, InnerExpr}}	->
+			EvaluatedVarValue = evaluate(VarValue, Context),
+			evaluate(InnerExpr, dict:store(VarName, EvaluatedVarValue, Context))
 	end.
 	
 deeper(DepthString) ->
@@ -65,7 +84,14 @@ simplifier({times, Lhs , Rhs}) ->
 		{{num, 1}, SimpleRhs} -> SimpleRhs;
 		{SimpleLhs,{num, 1}} -> SimpleLhs;	
 		_ -> {times, SimpleLhs, SimpleRhs }
-	end;				 
+	end;	
+simplifier({if_operation, Condition, ThenClause, ElseClause}) ->
+	case simplifier(Condition) of
+		{num, 0} -> simplifier(ElseClause);
+		{num, _} -> simplifier(ThenClause);
+		SimplifiedCondition -> { if_operation, SimplifiedCondition, simplifier(ThenClause), simplifier(ElseClause)}
+	end;						 
+	
 simplifier({plus, Lhs , Rhs}) ->
 	SimpleLhs = simplifier(Lhs),
 	SimpleRhs = simplifier(Rhs),
@@ -86,6 +112,8 @@ simplifier({minus, Lhs , Rhs}) ->
 		{num, 0} -> SimpleLhs;
 		_ -> {minus, SimpleLhs, SimpleRhs}
 	end;
+simplifier({let_clause, {VarName, VarValue, InnerExpr}})	->
+	{let_clause, {VarName, simplifier(VarValue), simplifier(InnerExpr)}};
 simplifier(Expression) ->
 	Expression.		
 		
@@ -116,6 +144,7 @@ ast_to_machine(Expression) ->
 	 	{times, Lhs, Rhs} -> 
 			ast_to_machine(Lhs) ++ ast_to_machine(Rhs) ++ [times]					
 	end.	
+
 
 run_simulator([Value| []]) ->	
 	Value;
@@ -154,8 +183,10 @@ get_syntax_tree_test_() ->
 		?_assert(create_syntax_tree("4-2") =:= {minus,{num, 4},{num,2}}),	
 		?_assert(create_syntax_tree("4*2") =:= {times,{num, 4},{num,2}}),
 		?_assert(create_syntax_tree("\~4") =:= {unary_minus, {num, 4}}),
-		?_assert(create_syntax_tree("if 1 then 2 else 3") =:= { if_operation, {num, 1}, {num, 2}, {num, 3} }),
-		?_assert(create_syntax_tree("((2+3)-4)") =:= {minus, {plus, {num, 2}, {num,3}}, {num, 4}})	
+		?_assert(create_syntax_tree("if \~1 then 2 else 3") =:= { if_operation, {unary_minus, {num, 1}}, {num, 2}, {num, 3} }),
+		?_assert(create_syntax_tree("((2+3)-4)") =:= {minus, {plus, {num, 2}, {num,3}}, {num, 4}}),
+		?_assert(create_syntax_tree("let x = 1 in x") =:= {let_clause, {{var_name, "x"}, {num, 1}, {var_name, "x"}}} ),
+		?_assert(create_syntax_tree("x = 1") =:= { assignment, {{var_name, "x"}, {num, 1}}})
 	].
 	
 interpretor_test_() ->
@@ -168,7 +199,11 @@ interpretor_test_() ->
 		?_assert(interpret("4-2") =:= 2),	
 		?_assert(interpret("4*2") =:= 8),
 		?_assert(interpret("((2+3)-4)") =:= 1),
-		?_assert(interpret("if 1 then 2 else 3") =:= 2)				
+		?_assert(interpret("if 1 then 2 else 3") =:= 2),
+		?_assert(interpret("if (9 * 0) then 2 else 3") =:= 3),
+		?_assert(interpret("let x = 1 in x") =:= 1),				
+		?_assert(interpret("let x = 1 in let y = x in y") =:= 1),	
+		?_assert(interpret("x = 1\nx") =:= 1)
 	].	
 	
 simplifier_test_() ->
@@ -176,7 +211,9 @@ simplifier_test_() ->
 		?_assert(simplifier({plus,{num, 4},{num,2}}) =:= {plus,{num, 4},{num,2}}),
 		?_assert(simplifier({plus,{num, 0},{num,2}}) =:= {num,2}),
 		?_assert(simplifier({plus,{num, 4},{num,0}}) =:= {num,4}),
-		?_assert(simplifier({unary_minus, {plus,{num, 0},{num,0}}}) =:= {num,0})
+		?_assert(simplifier({unary_minus, {plus,{num, 0},{num,0}}}) =:= {num,0}),
+		?_assert(simplifier({ if_operation, {num, 1}, {num, 2}, {num, 3} }) =:= {num,2}),
+		?_assert(simplifier({ if_operation, {num, 0}, {num, 2}, {num, 3} }) =:= {num,3})
 	].
 compiler_test_() ->
 	[
@@ -197,5 +234,5 @@ simulator_test_() ->
 		?_assert(run("\~\~4") =:= 4),
 		?_assert(run("2+4") =:= 6),
 		?_assert(run("2-4") =:= -2),
-		?_assert(run("2*4") =:= 8)				
+		?_assert(run("2*4") =:= 8)			
 	].	
