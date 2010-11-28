@@ -34,14 +34,22 @@ expression_from_tokens([First|List]) ->
 	end.
 		
 create_syntax_tree(String) ->
-	[Tokens | Lists] = lexer:get_token_list(String),
+	[Tokens | _ ] = lexer:get_token_list(String),
 	{Result, []} = expression_from_tokens(Tokens),
 	simplifier(Result).
 
 
-evaluate(Expression) ->
-	evaluate(Expression, dict:new()).
-	
+evaluate_list([{ Expression, []} | []], Context) ->
+	evaluate(Expression, Context);
+evaluate_list([{ FinalExpression, []} | Rest], Context) ->
+	case evaluate(FinalExpression, Context) of
+		{assignment_statement, {{var_name, VariableName}, Value}} ->
+			evaluate_list(Rest, dict:store(VariableName, Value, Context));
+		_Evaled -> 
+			evaluate_list(Rest, Context)
+	end.
+
+
 evaluate(Expression, Context) ->
 	case Expression of 
 		{num, Val} -> Val;
@@ -59,7 +67,9 @@ evaluate(Expression, Context) ->
 			end;
 		{let_clause, {{var_name, VarName}, VarValue, InnerExpr}}	->
 			EvaluatedVarValue = evaluate(VarValue, Context),
-			evaluate(InnerExpr, dict:store(VarName, EvaluatedVarValue, Context))
+			evaluate(InnerExpr, dict:store(VarName, EvaluatedVarValue, Context));
+		{ assignment, {Variable, AssignmentValue}} ->
+			{assignment_statement, {Variable, evaluate(AssignmentValue, Context)}}
 	end.
 	
 deeper(DepthString) ->
@@ -129,7 +139,7 @@ print(Expression, DepthString) ->
 			NegatedString = string:concat(DepthString,"Negated:~n"),
 			io:format(NegatedString),
 			print(Negated, deeper(DepthString))
-	end.		
+	end.
 
 ast_to_machine(Expression) ->
 	case Expression of
@@ -144,7 +154,6 @@ ast_to_machine(Expression) ->
 	 	{times, Lhs, Rhs} -> 
 			ast_to_machine(Lhs) ++ ast_to_machine(Rhs) ++ [times]					
 	end.	
-
 
 run_simulator([Value| []]) ->	
 	Value;
@@ -166,8 +175,9 @@ run(String) ->
 	run_simulator(MachineCode).
 	
 interpret(String) ->
-	Expression = create_syntax_tree(String),
-	evaluate(Expression).
+	Strings =  lexer:get_token_list(String),
+	ExpressionList = lists:map(fun expression_from_tokens/1, Strings),
+	evaluate_list(ExpressionList, dict:new()).
 	
 pretty_print(String) ->
 	Expression = create_syntax_tree(String),
