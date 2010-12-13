@@ -1,13 +1,9 @@
 -module(lexer).
 
--export([get_token_list/1, token_for_char/1, get_tokens/1, error_at/1]).
+-export([get_tokens/1]).
 
 -include_lib("eunit/include/eunit.hrl").
 
-error_at(Msg) ->
-	io:format("error of ~p.~n", [Msg]),
-	throw({ error, unparsable_unit, Msg}).
-	
 token_for_char(Char) ->
 	case Char of 
 		45 -> {binop, minus};
@@ -15,6 +11,7 @@ token_for_char(Char) ->
 		42 -> {binop, times};
 		41 -> close_paren;
 		40 -> open_paren;
+		10 -> newline;
 		126 -> unary_minus;
 		61 -> equals;
 		_ -> { nomatch, Char }
@@ -55,28 +52,48 @@ get_tokens([Token|Rest]) when Token =:= 32 ->
 get_tokens([Token|Rest]) -> 
 	[token_for_char(Token) | get_tokens(Rest)].
 
-get_token_list(String) ->
-	Lines = string:tokens(String, "\n"),
-	lists:map(fun get_tokens/1, Lines).
+
 	
 get_token_list_test_() ->
 	[
-		?_assert(get_token_list("-") =:= [[{binop, minus}]]),
-		?_assert(get_token_list("+") =:= [[{binop, plus}]]),
-		?_assert(get_token_list("*") =:= [[{binop, times}]]),
-		?_assert(get_token_list(")") =:= [[close_paren]]),
-		?_assert(get_token_list("(") =:= [[open_paren]]),
-		?_assert(get_token_list("\~") =:= [[unary_minus]]),
-		?_assert(get_token_list("3") =:= [[{number, 3}]]),
-		?_assert(get_token_list("3+3") =:= [[{number, 3},{binop, plus},{number, 3}]]),				
-		?_assert(get_token_list(" 3  +   3 ") =:= [[{number, 3},{binop, plus},{number, 3}]]),
-		?_assert(get_token_list("33") =:= [[{number, 33}]]),
-		?_assert(get_token_list("3\n3") =:= [[{number, 3}],[{number, 3}]]),
-		?_assert(get_token_list("foobar") =:= [[{string, "foobar"}]]),	
-		?_assert(get_token_list("if") =:= [[if_token]]),
-		?_assert(get_token_list("else") =:= [[else_token]]),
-		?_assert(get_token_list("then") =:= [[then_token]]),
-		?_assert(get_token_list("let") =:= [[let_token]]),
-		?_assert(get_token_list("in") =:= [[in_token]]),
-		?_assert(get_token_list("=") =:= [[equals]])		
+		?_assert(get_tokens("-") =:= [{binop, minus}]),
+		?_assert(get_tokens("+") =:= [{binop, plus}]),
+		?_assert(get_tokens("*") =:= [{binop, times}]),
+		?_assert(get_tokens(")") =:= [close_paren]),
+		?_assert(get_tokens("(") =:= [open_paren]),
+		?_assert(get_tokens("\~") =:= [unary_minus]),
+		?_assert(get_tokens("3") =:= [{number, 3}]),
+		?_assert(get_tokens("3+3") =:= [{number, 3},{binop, plus},{number, 3}]),				
+		?_assert(get_tokens(" 3  +   3 ") =:= [{number, 3},{binop, plus},{number, 3}]),
+		?_assert(get_tokens("33") =:= [{number, 33}]),
+		?_assert(get_tokens("3\n3") =:= [{number, 3},newline,{number, 3}]),
+		?_assert(get_tokens("foobar") =:= [{string, "foobar"}]),	
+		?_assert(get_tokens("if") =:= [if_token]),
+		?_assert(get_tokens("else") =:= [else_token]),
+		?_assert(get_tokens("then") =:= [then_token]),
+		?_assert(get_tokens("let") =:= [let_token]),
+		?_assert(get_tokens("in") =:= [in_token]),
+		?_assert(get_tokens("=") =:= [equals])		
 	].
+	
+get_token_list_from_lexer_test_() ->
+	[
+		?_assert(get_tokens_from_lexer("-") =:= [{binop, minus}]),
+		?_assert(get_tokens_from_lexer("+") =:= [{binop, plus}]),
+		?_assert(get_tokens_from_lexer("*") =:= [{binop, times}]),
+		?_assert(get_tokens_from_lexer(")") =:= [close_paren]),
+		?_assert(get_tokens_from_lexer("(") =:= [open_paren]),
+		?_assert(get_tokens_from_lexer("\~") =:= [unary_minus]),
+		?_assert(get_tokens_from_lexer("3") =:= [{number, 3}]),
+		?_assert(get_tokens_from_lexer("3+3") =:= [{number, 3},{binop, plus},{number, 3}]),				
+		?_assert(get_tokens_from_lexer(" 3  +   3 ") =:= [{number, 3},{binop, plus},{number, 3}]),
+		?_assert(get_tokens_from_lexer("33") =:= [{number, 33}]),
+		?_assert(get_tokens_from_lexer("3\n3") =:= [{number, 3},newline,{number, 3}]),
+		?_assert(get_tokens_from_lexer("foobar") =:= [{string, "foobar"}]),	
+		?_assert(get_tokens_from_lexer("if") =:= [if_token]),
+		?_assert(get_tokens_from_lexer("else") =:= [else_token]),
+		?_assert(get_tokens_from_lexer("then") =:= [then_token]),
+		?_assert(get_tokens_from_lexer("let") =:= [let_token]),
+		?_assert(get_tokens_from_lexer("in") =:= [in_token]),
+		?_assert(get_tokens_from_lexer("=") =:= [equals])		
+	].	

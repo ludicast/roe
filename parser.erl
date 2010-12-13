@@ -1,202 +1,135 @@
 -module(parser).
--export([create_syntax_tree/1, interpret/1,pretty_print/1,run/1,compile/1, simplifier/1]).
+-export([create_syntax_tree/1, interpret/1, split_groups/1, clean_expression_from_tokens/1, expression_from_tokens/1]).
 -include_lib("eunit/include/eunit.hrl").
 
 expression_from_tokens([First|List]) ->
 	{Value,Rest} = case First of
-		{number, Val} -> {{num, Val}, List};
-		{string, Val} -> {{var_name, Val}, List};
-		open_paren -> 
-			{InnerValue, [close_paren|PostParens]} = expression_from_tokens(List),
+		{integer, _Line, Val} -> {{num, Val}, List};
+		{identifier, _Line, Val} -> {{var_name, atom_to_list(Val)}, List};
+		{'(', _OpenLine} -> 
+			{InnerValue, [{')', _CloseLine}|PostParens]} = expression_from_tokens(List),
 			{InnerValue, PostParens};
-		unary_minus -> 
+		{'~', _Line} -> 
 			{FlippedValue, PostValue} = expression_from_tokens(List),
 			{{unary_minus, FlippedValue},PostValue};
-		if_token ->
-			{ FirstExpression, [then_token|AfterThen] } = expression_from_tokens(List),
-			{ SecondExpression, [ else_token | AfterElse] } =  expression_from_tokens(AfterThen),
+		{'if', _IfLine} ->
+			{ FirstExpression, [{'then', _ThenLine} | AfterThen] } = expression_from_tokens(List),
+			{ SecondExpression, [ {'else', _ElseLine} | AfterElse] } =  expression_from_tokens(AfterThen),
 			{ ElseResult, EndTokens } = expression_from_tokens(AfterElse),
 			{{if_operation, FirstExpression, SecondExpression, ElseResult}, EndTokens};
-		let_token ->
-			[{string, VarName} | [ equals |  AfterEquals  ] ]  = List,
-			{Rhs, [in_token | InExpression] } = expression_from_tokens(AfterEquals),
+		{'let', _LetLine} ->
+			[{identifier, _VarLine, VarName} | [{'=', _EqualLine} |  AfterEquals  ] ]  = List,
+			{Rhs, [{ in, _InLine }| InExpression] } = expression_from_tokens(AfterEquals),
 			{TranslatedInExpression, InExpressionRemainder} = expression_from_tokens(InExpression),
-			{{let_clause, {{var_name, VarName}, Rhs, TranslatedInExpression}}, InExpressionRemainder}
+			{{let_clause, {{var_name, atom_to_list(VarName)}, Rhs, TranslatedInExpression}}, InExpressionRemainder}
 	end,
 	case Rest of
-		[{binop, Operation}|RightHandSide] ->
+		[{'+', _OpLine}|RightHandSide] ->
 			{ RightHandSideTree, AfterTree } = expression_from_tokens(RightHandSide),
-			{{Operation, Value, RightHandSideTree}, AfterTree};
-		[equals | Assignment] ->
+			{{plus, Value, RightHandSideTree}, AfterTree};
+		[{'-', _OpLine}|RightHandSide] ->
+			{ RightHandSideTree, AfterTree } = expression_from_tokens(RightHandSide),
+			{{minus, Value, RightHandSideTree}, AfterTree};		
+		[{'*', _OpLine}|RightHandSide] ->
+			{ RightHandSideTree, AfterTree } = expression_from_tokens(RightHandSide),
+			{{times, Value, RightHandSideTree}, AfterTree};				
+		[{'=', _OpLine} | Assignment] ->
 			{AssignmentValue, ParseRamainder} = expression_from_tokens(Assignment),
 			{{ assignment, {Value, AssignmentValue}}, ParseRamainder};	
 		_ -> {Value, Rest}
 	end.
 		
-create_syntax_tree(String) ->
-	[Tokens | _ ] = lexer:get_token_list(String),
+clean_expression_from_tokens(Tokens) ->	
 	{Result, []} = expression_from_tokens(Tokens),
-	simplifier(Result).
+	Result.
+		
+split_groups([{eol,_Line} | Rest], Remainder, Grouped) ->
+	split_groups(Rest, [],Grouped ++ [Remainder]);
+split_groups([Other | Rest], Remainder, Grouped) ->
+	split_groups(Rest, Remainder ++ [Other],Grouped);	
+split_groups([], Remainder, Grouped) ->
+	Grouped ++ [Remainder].
+		
+split_groups(Tokens) ->		
+	split_groups(Tokens, [], []).
+	
+create_syntax_tree(String) ->
+	{ok, Tokens, _Lines} = ruby_scan:string(String),
+	TokenGroups = split_groups(Tokens),
+	Result = lists:map(fun clean_expression_from_tokens/1, TokenGroups),
+	{block, lists:map(fun simplifier:simplify/1, Result) }.
 
+evaluate_block([Last | []], Context) ->
+	{Val, Cxt} = evaluate(Last, Context),
+	Val;
+evaluate_block([Head | Rest], Context) ->
+	{Val, NewContext} = evaluate(Head, Context),
+	io:format("evalling 2nd ~p ~n", [Rest]),	
+	evaluate_block(Rest, NewContext).
 
-evaluate_list([{ Expression, []} | []], Context) ->
-	evaluate(Expression, Context);
-evaluate_list([{ FinalExpression, []} | Rest], Context) ->
-	case evaluate(FinalExpression, Context) of
-		{assignment_statement, {{var_name, VariableName}, Value}} ->
-			evaluate_list(Rest, dict:store(VariableName, Value, Context));
-		_Evaled -> 
-			evaluate_list(Rest, Context)
-	end.
+evaluate_without_returning_context(Expression, Context) ->
+	{Result, NewContext} = evaluate(Expression, Context),
+	Result.
 
+evaluate({ assignment, {{var_name, VarName}, AssignmentValue}}, Context) ->
 
+	{ EvaluatedVarValue, AssignedContext } = evaluate(AssignmentValue, Context),
+	{ EvaluatedVarValue, dict:store(VarName, EvaluatedVarValue, AssignedContext)};
 evaluate(Expression, Context) ->
-	case Expression of 
+	RetVal = case Expression of 
 		{num, Val} -> Val;
+		{block, BlockList} -> evaluate_block(BlockList, Context);
 		{var_name, VarName} -> 
 			{ok, Value} = dict:find(VarName, Context),
 			Value;
-		{plus, Lhs, Rhs} -> evaluate(Lhs, Context) + evaluate(Rhs, Context);		
-		{minus, Lhs, Rhs} -> evaluate(Lhs, Context) - evaluate(Rhs, Context);		
-		{times, Lhs, Rhs} -> evaluate(Lhs, Context) * evaluate(Rhs, Context);							
-		{unary_minus, Negated} -> -evaluate(Negated, Context);
+		{plus, Lhs, Rhs} -> 
+			evaluate_without_returning_context(Lhs, Context) + evaluate_without_returning_context(Rhs, Context);		
+		{minus, Lhs, Rhs} -> 
+			evaluate_without_returning_context(Lhs, Context) - evaluate_without_returning_context(Rhs, Context);		
+		{times, Lhs, Rhs} -> 
+			evaluate_without_returning_context(Lhs, Context) * evaluate_without_returning_context(Rhs, Context);							
+		{unary_minus, Negated} -> -evaluate_without_returning_context(Negated, Context);
 		{if_operation, Condition, ThenClause, ElseClause} ->
-			case evaluate(Condition, Context) of
-				0 -> evaluate(ElseClause, Context);
-				_ -> evaluate(ThenClause, Context)
+			case evaluate_without_returning_context(Condition, Context) of
+				0 -> evaluate_without_returning_context(ElseClause, Context);
+				_ -> evaluate_without_returning_context(ThenClause, Context)
 			end;
 		{let_clause, {{var_name, VarName}, VarValue, InnerExpr}}	->
-			EvaluatedVarValue = evaluate(VarValue, Context),
-			evaluate(InnerExpr, dict:store(VarName, EvaluatedVarValue, Context));
-		{ assignment, {Variable, AssignmentValue}} ->
-			{assignment_statement, {Variable, evaluate(AssignmentValue, Context)}}
-	end.
+			{ EvaluatedVarValue, Context } = evaluate(VarValue, Context),
+			evaluate_without_returning_context(InnerExpr, dict:store(VarName, EvaluatedVarValue, Context))			
+	end,
+	{RetVal, Context}.
 	
-deeper(DepthString) ->
-	string:concat("  ", DepthString).
-	
-print_binop(OpName, Lhs, Rhs, DepthString) ->
-	io:format(string:concat(string:concat(DepthString, OpName), ":~n")),
-	print(Lhs, deeper(DepthString)),	
-	print(Rhs, deeper(DepthString)).
-		
-simplifier({unary_minus, Negated}) ->
-	case simplifier(Negated) of
-		{num, 0} -> {num, 0};
-		Simplified -> {unary_minus, Simplified}
-	end;	
-simplifier({times, Lhs , Rhs}) ->
-	SimpleLhs = simplifier(Lhs),
-	SimpleRhs = simplifier(Rhs),
-	case { SimpleLhs, SimpleRhs } of 
-		{{num, 0}, _} -> {num, 0};
-		{_,{num, 0}} -> {num, 0};
-		{{num, 1}, SimpleRhs} -> SimpleRhs;
-		{SimpleLhs,{num, 1}} -> SimpleLhs;	
-		_ -> {times, SimpleLhs, SimpleRhs }
-	end;	
-simplifier({if_operation, Condition, ThenClause, ElseClause}) ->
-	case simplifier(Condition) of
-		{num, 0} -> simplifier(ElseClause);
-		{num, _} -> simplifier(ThenClause);
-		SimplifiedCondition -> { if_operation, SimplifiedCondition, simplifier(ThenClause), simplifier(ElseClause)}
-	end;						 
-	
-simplifier({plus, Lhs , Rhs}) ->
-	SimpleLhs = simplifier(Lhs),
-	SimpleRhs = simplifier(Rhs),
-	case SimpleLhs of
-		{num, 0} -> SimpleRhs;
-		_ ->
-			case SimpleRhs of
-				{num, 0} -> 
-					SimpleLhs;
-				_ ->
-					{plus, SimpleLhs, SimpleRhs}
-			end		
-	end;
-simplifier({minus, Lhs , Rhs}) ->
-	SimpleLhs = simplifier(Lhs),
-	SimpleRhs = simplifier(Rhs),
-	case SimpleRhs of 
-		{num, 0} -> SimpleLhs;
-		_ -> {minus, SimpleLhs, SimpleRhs}
-	end;
-simplifier({let_clause, {VarName, VarValue, InnerExpr}})	->
-	{let_clause, {VarName, simplifier(VarValue), simplifier(InnerExpr)}};
-simplifier(Expression) ->
-	Expression.		
-		
-print(Expression, DepthString) ->
-	case Expression of 
-		{num, Val} -> 
-			ValString = string:concat(DepthString, "~p~n"),
-			io:format(ValString, [Val]);
-		{plus, Lhs, Rhs} -> print_binop("Plus", Lhs, Rhs, DepthString);	
-		{minus, Lhs, Rhs} -> print_binop("Minus", Lhs, Rhs, DepthString);		
-		{times, Lhs, Rhs} -> print_binop("Times", Lhs, Rhs, DepthString);							
-		{unary_minus, Negated} -> 
-			NegatedString = string:concat(DepthString,"Negated:~n"),
-			io:format(NegatedString),
-			print(Negated, deeper(DepthString))
-	end.
 
-ast_to_machine(Expression) ->
-	case Expression of
-		{num, Num} -> 
-			[Num];
-		{unary_minus, Negated} -> 
-			ast_to_machine(Negated) ++ [unary_minus];
-	 	{plus, Lhs, Rhs} -> 
-			ast_to_machine(Lhs) ++ ast_to_machine(Rhs) ++ [plus];
-		{minus, Lhs, Rhs} -> 
-			ast_to_machine(Lhs) ++ ast_to_machine(Rhs) ++ [minus];
-	 	{times, Lhs, Rhs} -> 
-			ast_to_machine(Lhs) ++ ast_to_machine(Rhs) ++ [times]					
-	end.	
-
-run_simulator([Value| []]) ->	
-	Value;
-run_simulator([ Negatable | [ unary_minus | Rest ] ]) ->
-	run_simulator( [-Negatable | Rest] );
-run_simulator([ Lhs | [Rhs | [ plus | Rest ] ] ]) ->
-	run_simulator( [Lhs + Rhs | Rest] );
-run_simulator([ Lhs | [Rhs | [ minus | Rest ] ] ]) ->
-	run_simulator( [Lhs - Rhs | Rest] );
-run_simulator([ Lhs | [Rhs | [ times | Rest ] ] ]) ->
-	run_simulator( [Lhs * Rhs | Rest] ).				
-	
-compile(String) ->
-	Expression = create_syntax_tree(String),
-	ast_to_machine(Expression).
-				
-run(String) ->
-	MachineCode = compile(String),
-	run_simulator(MachineCode).
-	
 interpret(String) ->
-	Strings =  lexer:get_token_list(String),
-	ExpressionList = lists:map(fun expression_from_tokens/1, Strings),
-	evaluate_list(ExpressionList, dict:new()).
+	RootExpression = create_syntax_tree(String),
+	{Result, Context} = evaluate(RootExpression, dict:new()),
+	Result.
 	
-pretty_print(String) ->
-	Expression = create_syntax_tree(String),
-	print(Expression, "").
+pull_from_block(String)	->
+	{block, ExpressionList} = create_syntax_tree(String),
+	ExpressionList.
+	
+pull_single_from_block(String) ->
+	[Head | []] = pull_from_block(String),
+	Head.	
+	
 	
 get_syntax_tree_test_() ->
 	[
-		?_assert(create_syntax_tree("4") =:= {num, 4}),
-		?_assert(create_syntax_tree("(4)") =:= {num, 4}),
-		?_assert(create_syntax_tree("((4))") =:= {num, 4}),
-		?_assert(create_syntax_tree("\~(4)") =:= {unary_minus, {num, 4}}),
-		?_assert(create_syntax_tree("4+2") =:= {plus,{num, 4},{num,2}}),		
-		?_assert(create_syntax_tree("4-2") =:= {minus,{num, 4},{num,2}}),	
-		?_assert(create_syntax_tree("4*2") =:= {times,{num, 4},{num,2}}),
-		?_assert(create_syntax_tree("\~4") =:= {unary_minus, {num, 4}}),
-		?_assert(create_syntax_tree("if \~1 then 2 else 3") =:= { if_operation, {unary_minus, {num, 1}}, {num, 2}, {num, 3} }),
-		?_assert(create_syntax_tree("((2+3)-4)") =:= {minus, {plus, {num, 2}, {num,3}}, {num, 4}}),
-		?_assert(create_syntax_tree("let x = 1 in x") =:= {let_clause, {{var_name, "x"}, {num, 1}, {var_name, "x"}}} ),
-		?_assert(create_syntax_tree("x = 1") =:= { assignment, {{var_name, "x"}, {num, 1}}})
+		?_assert(pull_single_from_block("4") =:= {num, 4}),
+		?_assert(pull_single_from_block("(4)") =:= {num, 4}),
+		?_assert(pull_single_from_block("((4))") =:= {num, 4}),
+		?_assert(pull_single_from_block("\~(4)") =:= {unary_minus, {num, 4}}),
+		?_assert(pull_single_from_block("4+2") =:= {plus,{num, 4},{num,2}}),		
+		?_assert(pull_single_from_block("4-2") =:= {minus,{num, 4},{num,2}}),	
+		?_assert(pull_single_from_block("4*2") =:= {times,{num, 4},{num,2}}),
+		?_assert(pull_single_from_block("\~4") =:= {unary_minus, {num, 4}}),
+		?_assert(pull_single_from_block("if \~1 then 2 else 3") =:= { if_operation, {unary_minus, {num, 1}}, {num, 2}, {num, 3} }),
+		?_assert(pull_single_from_block("((2+3)-4)") =:= {minus, {plus, {num, 2}, {num,3}}, {num, 4}}),
+		?_assert(pull_single_from_block("let x = 1 in x") =:= {let_clause, {{var_name, "x"}, {num, 1}, {var_name, "x"}}} ),
+		?_assert(pull_single_from_block("x = 1") =:= { assignment, {{var_name, "x"}, {num, 1}}}),
+		?_assert(pull_from_block("x = 1\nx") =:= [{ assignment, {{var_name, "x"}, {num, 1}}}, {var_name, "x"}])
 	].
 	
 interpretor_test_() ->
@@ -214,35 +147,4 @@ interpretor_test_() ->
 		?_assert(interpret("let x = 1 in x") =:= 1),				
 		?_assert(interpret("let x = 1 in let y = x in y") =:= 1),	
 		?_assert(interpret("x = 1\nx") =:= 1)
-	].	
-	
-simplifier_test_() ->
-	[	
-		?_assert(simplifier({plus,{num, 4},{num,2}}) =:= {plus,{num, 4},{num,2}}),
-		?_assert(simplifier({plus,{num, 0},{num,2}}) =:= {num,2}),
-		?_assert(simplifier({plus,{num, 4},{num,0}}) =:= {num,4}),
-		?_assert(simplifier({unary_minus, {plus,{num, 0},{num,0}}}) =:= {num,0}),
-		?_assert(simplifier({ if_operation, {num, 1}, {num, 2}, {num, 3} }) =:= {num,2}),
-		?_assert(simplifier({ if_operation, {num, 0}, {num, 2}, {num, 3} }) =:= {num,3})
-	].
-compiler_test_() ->
-	[
-		?_assert(compile("4") =:= [4]),
-		?_assert(compile("((4))") =:= [4]),
-		?_assert(compile("2+4") =:= [ 2 | [ 4 | [ plus ] ] ]),
-		?_assert(compile("2-4") =:= [ 2 | [ 4 | [ minus ] ] ]),
-		?_assert(compile("2*4") =:= [ 2 | [ 4 | [ times ] ] ]),		
-		?_assert(compile("\~4") =:= [ 4 | [ unary_minus ] ]),
-		?_assert(compile("\~\~4") =:= [ 4 | [ unary_minus | [ unary_minus ] ] ])
-	].
-	
-simulator_test_() ->
-	[
-		?_assert(run("4") =:= 4),
-		?_assert(run("((4))") =:= 4),
-		?_assert(run("\~4") =:= -4),
-		?_assert(run("\~\~4") =:= 4),
-		?_assert(run("2+4") =:= 6),
-		?_assert(run("2-4") =:= -2),
-		?_assert(run("2*4") =:= 8)			
 	].	
