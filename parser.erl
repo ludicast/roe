@@ -1,62 +1,12 @@
 -module(parser).
--export([create_syntax_tree/1, interpret/1, split_groups/1, clean_expression_from_tokens/1, expression_from_tokens/1]).
+-export([interpret/1]).
 -include_lib("eunit/include/eunit.hrl").
-
-expression_from_tokens([First|List]) ->
-	{Value,Rest} = case First of
-		{integer, _Line, Val} -> {{num, Val}, List};
-		{identifier, _Line, Val} -> {{var_name, atom_to_list(Val)}, List};
-		{'(', _OpenLine} -> 
-			{InnerValue, [{')', _CloseLine}|PostParens]} = expression_from_tokens(List),
-			{InnerValue, PostParens};
-		{'~', _Line} -> 
-			{FlippedValue, PostValue} = expression_from_tokens(List),
-			{{unary_minus, FlippedValue},PostValue};
-		{'if', _IfLine} ->
-			{ FirstExpression, [{'then', _ThenLine} | AfterThen] } = expression_from_tokens(List),
-			{ SecondExpression, [ {'else', _ElseLine} | AfterElse] } =  expression_from_tokens(AfterThen),
-			{ ElseResult, EndTokens } = expression_from_tokens(AfterElse),
-			{{if_operation, FirstExpression, SecondExpression, ElseResult}, EndTokens};
-		{'let', _LetLine} ->
-			[{identifier, _VarLine, VarName} | [{'=', _EqualLine} |  AfterEquals  ] ]  = List,
-			{Rhs, [{ in, _InLine }| InExpression] } = expression_from_tokens(AfterEquals),
-			{TranslatedInExpression, InExpressionRemainder} = expression_from_tokens(InExpression),
-			{{let_clause, {{var_name, atom_to_list(VarName)}, Rhs, TranslatedInExpression}}, InExpressionRemainder}
-	end,
-	case Rest of
-		[{'+', _OpLine}|RightHandSide] ->
-			{ RightHandSideTree, AfterTree } = expression_from_tokens(RightHandSide),
-			{{plus, Value, RightHandSideTree}, AfterTree};
-		[{'-', _OpLine}|RightHandSide] ->
-			{ RightHandSideTree, AfterTree } = expression_from_tokens(RightHandSide),
-			{{minus, Value, RightHandSideTree}, AfterTree};		
-		[{'*', _OpLine}|RightHandSide] ->
-			{ RightHandSideTree, AfterTree } = expression_from_tokens(RightHandSide),
-			{{times, Value, RightHandSideTree}, AfterTree};				
-		[{'=', _OpLine} | Assignment] ->
-			{AssignmentValue, ParseRamainder} = expression_from_tokens(Assignment),
-			{{ assignment, {Value, AssignmentValue}}, ParseRamainder};	
-		_ -> {Value, Rest}
-	end.
-		
-clean_expression_from_tokens(Tokens) ->	
-	{Result, []} = expression_from_tokens(Tokens),
-	Result.
-		
-split_groups([{eol,_Line} | Rest], Remainder, Grouped) ->
-	split_groups(Rest, [],Grouped ++ [Remainder]);
-split_groups([Other | Rest], Remainder, Grouped) ->
-	split_groups(Rest, Remainder ++ [Other],Grouped);	
-split_groups([], Remainder, Grouped) ->
-	Grouped ++ [Remainder].
-		
-split_groups(Tokens) ->		
-	split_groups(Tokens, [], []).
 	
 create_syntax_tree(String) ->
 	{ok, Tokens, _Lines} = ruby_scan:string(String),
-	TokenGroups = split_groups(Tokens),
-	Result = lists:map(fun clean_expression_from_tokens/1, TokenGroups),
+	%TokenGroups = split_groups(Tokens),
+	%Result =   lists:map(fun clean_expression_from_tokens/1, TokenGroups),
+	{ok, Result} = ruby_parse:parse(Tokens),
 	{block, lists:map(fun simplifier:simplify/1, Result) }.
 
 evaluate_block([Last | []], Context) ->
@@ -113,24 +63,6 @@ pull_from_block(String)	->
 pull_single_from_block(String) ->
 	[Head | []] = pull_from_block(String),
 	Head.	
-	
-	
-get_syntax_tree_test_() ->
-	[
-		?_assert(pull_single_from_block("4") =:= {num, 4}),
-		?_assert(pull_single_from_block("(4)") =:= {num, 4}),
-		?_assert(pull_single_from_block("((4))") =:= {num, 4}),
-		?_assert(pull_single_from_block("\~(4)") =:= {unary_minus, {num, 4}}),
-		?_assert(pull_single_from_block("4+2") =:= {plus,{num, 4},{num,2}}),		
-		?_assert(pull_single_from_block("4-2") =:= {minus,{num, 4},{num,2}}),	
-		?_assert(pull_single_from_block("4*2") =:= {times,{num, 4},{num,2}}),
-		?_assert(pull_single_from_block("\~4") =:= {unary_minus, {num, 4}}),
-		?_assert(pull_single_from_block("if \~1 then 2 else 3") =:= { if_operation, {unary_minus, {num, 1}}, {num, 2}, {num, 3} }),
-		?_assert(pull_single_from_block("((2+3)-4)") =:= {minus, {plus, {num, 2}, {num,3}}, {num, 4}}),
-		?_assert(pull_single_from_block("let x = 1 in x") =:= {let_clause, {{var_name, "x"}, {num, 1}, {var_name, "x"}}} ),
-		?_assert(pull_single_from_block("x = 1") =:= { assignment, {{var_name, "x"}, {num, 1}}}),
-		?_assert(pull_from_block("x = 1\nx") =:= [{ assignment, {{var_name, "x"}, {num, 1}}}, {var_name, "x"}])
-	].
 	
 interpretor_test_() ->
 	[
