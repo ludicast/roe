@@ -15,6 +15,12 @@ Terminals
 	
 Rootsymbol grammar.
 
+Right 100 '='. 
+Left 300 '+'. 
+Left 300 '-'. 
+Left 400 '*'. 
+Unary 500 '~'.
+
 grammar -> expr_list : '$1'.
 grammar -> '$empty' : [].
 

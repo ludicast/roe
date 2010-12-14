@@ -1,2 +1,4 @@
 *.dump
 *.beam
+ruby_parse.erl
+ruby_scan.erl
