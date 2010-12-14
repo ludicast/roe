@@ -4,6 +4,9 @@ erl -noshell -s leex file ruby_scan -s init stop
 erl -noshell -s yecc file ruby_parse -s init stop
 erlc ruby_scan.erl
 erlc ruby_parse.erl
-erlc parser.erl
+
 erlc simplifier.erl
-erl -noshell -s parser test -s init stop
+erlc interpretor.erl
+
+erl -noshell -s simplifier test -s init stop
+erl -noshell -s interpretor test -s init stop

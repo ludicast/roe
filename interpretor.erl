@@ -1,4 +1,4 @@
--module(parser).
+-module(interpretor).
 -export([interpret/1]).
 -include_lib("eunit/include/eunit.hrl").
 	
@@ -10,19 +10,17 @@ create_syntax_tree(String) ->
 	{block, lists:map(fun simplifier:simplify/1, Result) }.
 
 evaluate_block([Last | []], Context) ->
-	{Val, Cxt} = evaluate(Last, Context),
+	{Val, _Cxt} = evaluate(Last, Context),
 	Val;
 evaluate_block([Head | Rest], Context) ->
-	{Val, NewContext} = evaluate(Head, Context),
-	io:format("evalling 2nd ~p ~n", [Rest]),	
+	{_Val, NewContext} = evaluate(Head, Context),
 	evaluate_block(Rest, NewContext).
 
 evaluate_without_returning_context(Expression, Context) ->
-	{Result, NewContext} = evaluate(Expression, Context),
+	{Result, _NewContext} = evaluate(Expression, Context),
 	Result.
 
 evaluate({ assignment, {{var_name, VarName}, AssignmentValue}}, Context) ->
-
 	{ EvaluatedVarValue, AssignedContext } = evaluate(AssignmentValue, Context),
 	{ EvaluatedVarValue, dict:store(VarName, EvaluatedVarValue, AssignedContext)};
 evaluate(Expression, Context) ->
@@ -53,16 +51,8 @@ evaluate(Expression, Context) ->
 
 interpret(String) ->
 	RootExpression = create_syntax_tree(String),
-	{Result, Context} = evaluate(RootExpression, dict:new()),
+	{Result, _Context} = evaluate(RootExpression, dict:new()),
 	Result.
-	
-pull_from_block(String)	->
-	{block, ExpressionList} = create_syntax_tree(String),
-	ExpressionList.
-	
-pull_single_from_block(String) ->
-	[Head | []] = pull_from_block(String),
-	Head.	
 	
 interpretor_test_() ->
 	[
